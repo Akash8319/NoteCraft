@@ -18,9 +18,10 @@ class GeminiAPIError(Exception):
 
 FALLBACK_MODELS = [
     "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-flash-latest",
     "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+    "gemini-3.7-flash",
 ]
 
 
@@ -210,12 +211,13 @@ def generate_revision_notes(
                 if status_callback and idx > 0 and attempt == 0:
                     status_callback(f"🔄 High traffic detected on primary model. Switching to backup: {target_model}...")
 
+                token_cap = 5200 if depth == "Exhaustive" else 2800
                 response = client.models.generate_content(
                     model=target_model,
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.3,
-                        max_output_tokens=8192,
+                        max_output_tokens=token_cap,
                     ),
                 )
 

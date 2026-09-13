@@ -11,6 +11,7 @@ import os
 import re
 import time
 import html
+import hashlib
 import urllib.parse
 from datetime import datetime
 
@@ -134,6 +135,21 @@ html, body, [class*="css"] {{
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+}}
+
+/* Accessibility & Keyboard Focus (WCAG 2.1 AA) */
+:focus-visible {{
+    outline: 2px solid var(--primary) !important;
+    outline-offset: 2px !important;
+}}
+
+@media (prefers-reduced-motion: reduce) {{
+    *, *::before, *::after {{
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }}
 }}
 
 /* Custom Sleek Scrollbar */
@@ -1069,6 +1085,20 @@ def reset_state():
     st.session_state["concept_search_query"] = ""
 
 
+@st.cache_data(show_spinner=False, ttl=3600, max_entries=50)
+def cached_generate_revision_notes(file_hash: str, text: str, subject: str, depth: str, api_key: str) -> dict:
+    """
+    Caches parsed revision notes by PDF content hash.
+    Enables sub-second instant loads on repeated uploads or tab switches in deployment.
+    """
+    return generate_revision_notes(
+        api_key=api_key,
+        extracted_text=text,
+        subject=subject,
+        depth="Exhaustive" if "Exhaustive" in depth else "High-Yield",
+    )
+
+
 def extract_flashcards_from_result(result: dict) -> list:
     cards = []
     seen_terms = set()
@@ -1277,12 +1307,12 @@ with st.sidebar:
 # --------------------------------------------------------------------------
 st.markdown(
     """
-    <div class="top-nav-bar">
+    <nav class="top-nav-bar" role="navigation" aria-label="System Status and Engine Overview">
         <div class="top-nav-left">
-            <span class="live-dot-pulse"></span>
+            <span class="live-dot-pulse" aria-hidden="true"></span>
             <span class="top-nav-brand">NoteCraft Studio</span>
             <span class="top-nav-version">PRO '26</span>
-            <span class="top-nav-sep">•</span>
+            <span class="top-nav-sep" aria-hidden="true">•</span>
             <span class="top-nav-engine">⚡ Gemini 3.6 Flash Active</span>
         </div>
         <div class="top-nav-center">
@@ -1290,32 +1320,32 @@ st.markdown(
         </div>
         <div class="top-nav-right">
             <span class="top-nav-status">🟢 Engine Ready</span>
-            <span class="top-nav-sep">•</span>
+            <span class="top-nav-sep" aria-hidden="true">•</span>
             <span style="color: var(--text-muted); font-weight: 500;">Academic Session</span>
         </div>
-    </div>
-    <div class="top-ambient-glow"></div>
+    </nav>
+    <div class="top-ambient-glow" aria-hidden="true"></div>
     """,
     unsafe_allow_html=True,
 )
 st.markdown(
     """
-    <div class="hero-wrapper">
+    <header class="hero-wrapper" role="banner" aria-label="NoteCraft Academic Workspace Introduction">
         <div class="hero-pill">⚡ NoteCraft AI Studio</div>
         <h1 class="hero-title">NoteCraft</h1>
         <p class="hero-subtitle">
             Transform heavy lecture PDFs into high-yield study sheets, interactive active-recall flashcards,
             self-scoring quizzes, and 24/7 AI tutor guidance.
         </p>
-        <div class="feature-pills-row">
-            <span class="feature-pill">⚡ Powered by Gemini 3.6 Flash</span>
-            <span class="feature-pill">🃏 Flip Flashcards Deck</span>
-            <span class="feature-pill">🎯 Active Recall Quiz</span>
-            <span class="feature-pill">🎬 Video Explainers & Shorts</span>
-            <span class="feature-pill">💬 Ask NoteCraft AI Tutor</span>
-            <span class="feature-pill">🎧 Audio Revision Mode</span>
+        <div class="feature-pills-row" role="list" aria-label="Core Studio Features">
+            <span class="feature-pill" role="listitem">⚡ Powered by Gemini 3.6 Flash</span>
+            <span class="feature-pill" role="listitem">🃏 Flip Flashcards Deck</span>
+            <span class="feature-pill" role="listitem">🎯 Active Recall Quiz</span>
+            <span class="feature-pill" role="listitem">🎬 Video Explainers & Shorts</span>
+            <span class="feature-pill" role="listitem">💬 Ask NoteCraft AI Tutor</span>
+            <span class="feature-pill" role="listitem">🎧 Audio Revision Mode</span>
         </div>
-    </div>
+    </header>
     """,
     unsafe_allow_html=True,
 )
@@ -1388,14 +1418,15 @@ if generate_clicked:
 
                     active_api_key = api_key_input.strip() or get_api_key()
 
-                    status.write("🧠 Prompting Gemini 3.6 Flash for exhaustive study sheets & quiz...")
+                    file_hash = hashlib.md5(file_bytes).hexdigest()
+                    status.write("🧠 Prompting Gemini Flash Engine for study sheets & quiz...")
                     try:
-                        parsed = generate_revision_notes(
-                            api_key=active_api_key,
-                            extracted_text=extraction.text,
+                        parsed = cached_generate_revision_notes(
+                            file_hash=file_hash,
+                            text=extraction.text,
                             subject=subject,
-                            depth="Exhaustive" if "Exhaustive" in depth_choice else "High-Yield",
-                            status_callback=lambda msg: status.write(msg),
+                            depth=depth_choice,
+                            api_key=active_api_key,
                         )
                         status.update(label="✨ NoteCraft study materials generated successfully!", state="complete", expanded=False)
 
@@ -1575,13 +1606,13 @@ if result is not None:
             card_class = "exam-card" if is_takeaways else "study-card"
 
             card_html = (
-                f'<div class="{card_class}">'
+                f'<article class="{card_class}" role="article" aria-label="{html.escape(heading)}">'
                 f'  <div class="study-card-header">'
-                f'    <div class="study-card-icon">{icon}</div>'
+                f'    <div class="study-card-icon" aria-hidden="true">{icon}</div>'
                 f'    <div class="study-card-title">{html.escape(heading)}</div>'
                 f'  </div>'
                 f'  <div class="study-card-body">\n\n{display_content}\n\n</div>'
-                f'</div>'
+                f'</article>'
             )
             st.markdown(card_html, unsafe_allow_html=True)
 
@@ -1849,8 +1880,8 @@ if result is not None:
                     <p style="font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 22px;">
                         Watch verified topic-specific visual animations, step-by-step lecture walkthroughs, and rapid 60-second concept Shorts on YouTube with zero restrictions.
                     </p>
-                    <div style="display: flex; flex-wrap: wrap; gap: 12px;">
-                        <a href="{yt_shorts_url}" target="_blank" style="
+                    <div style="display: flex; flex-wrap: wrap; gap: 12px;" role="navigation" aria-label="Video Tutorial Links">
+                        <a href="{yt_shorts_url}" target="_blank" rel="noopener noreferrer" role="link" aria-label="Watch 60-Second YouTube Shorts on {html.escape(selected_topic)}" style="
                             display: inline-flex; align-items: center; gap: 8px;
                             background: linear-gradient(135deg, #FF0000, #B91C1C);
                             color: #FFFFFF !important; font-weight: 700; font-size: 0.92rem;
@@ -1858,9 +1889,9 @@ if result is not None:
                             box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
                             transition: all 0.2s ease;
                         ">
-                            📱 Watch 60-Second YouTube Shorts
+                            <span aria-hidden="true">📱</span> Watch 60-Second YouTube Shorts
                         </a>
-                        <a href="{yt_search_url}" target="_blank" style="
+                        <a href="{yt_search_url}" target="_blank" rel="noopener noreferrer" role="link" aria-label="Open Full University Lectures on {html.escape(selected_topic)}" style="
                             display: inline-flex; align-items: center; gap: 8px;
                             background: var(--surface-alt);
                             color: var(--text-primary) !important; font-weight: 600; font-size: 0.92rem;
@@ -1868,9 +1899,9 @@ if result is not None:
                             border: 1px solid var(--border);
                             transition: all 0.2s ease;
                         ">
-                            📺 Open Full University Lectures
+                            <span aria-hidden="true">📺</span> Open Full University Lectures
                         </a>
-                        <a href="{yt_animation_url}" target="_blank" style="
+                        <a href="{yt_animation_url}" target="_blank" rel="noopener noreferrer" role="link" aria-label="Visual Concept Animations for {html.escape(selected_topic)}" style="
                             display: inline-flex; align-items: center; gap: 8px;
                             background: var(--surface-alt);
                             color: var(--cyan) !important; font-weight: 600; font-size: 0.92rem;
@@ -1878,7 +1909,7 @@ if result is not None:
                             border: 1px solid rgba(6, 182, 212, 0.25);
                             transition: all 0.2s ease;
                         ">
-                            ✨ Visual Concept Animations
+                            <span aria-hidden="true">✨</span> Visual Concept Animations
                         </a>
                     </div>
                 </div>
@@ -2016,14 +2047,14 @@ if result is not None:
 else:
     st.markdown(
         """
-        <div class="empty-placeholder">
-            <div class="empty-icon">⚡</div>
-            <div class="empty-title">Welcome to NoteCraft</div>
-            <div class="empty-sub">
+        <section class="empty-placeholder" role="status" aria-live="polite" aria-label="Welcome placeholder">
+            <div class="empty-icon" aria-hidden="true">⚡</div>
+            <h2 class="empty-title">Welcome to NoteCraft</h2>
+            <p class="empty-sub">
                 Drop your lecture slides, notes, or syllabus PDF above and click <b>Craft Revision Workspace</b>
                 to generate structured study sheets, flip flashcards, active recall quizzes, and interactive AI tutoring.
-            </div>
-        </div>
+            </p>
+        </section>
         """,
         unsafe_allow_html=True,
     )
