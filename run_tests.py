@@ -21,7 +21,7 @@ def main():
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode == 0:
-            print("\n[PASS] ALL 23 TESTS PASSED SUCCESSFULLY! (100% Pass Rate, 89% Coverage)")
+            print("\n[PASS] ALL TESTS PASSED SUCCESSFULLY! (100% Pass Rate across all test suites)")
             return 0
         else:
             print(f"\n[FAIL] Tests completed with exit code: {result.returncode}")

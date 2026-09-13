@@ -17,9 +17,11 @@ class GeminiAPIError(Exception):
 
 
 FALLBACK_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
     "gemini-flash-latest",
     "gemini-3.7-flash",
 ]
@@ -130,20 +132,27 @@ def parse_notes_response(raw_text: str) -> dict:
     if QUIZ_DELIMITER in raw_text:
         notes_part, quiz_part = raw_text.split(QUIZ_DELIMITER, 1)
     else:
-        # Fallback: look for JSON array containing "question"
-        json_pattern = re.search(r"(\[\s*\{\s*\"question\".*\}\s*\])", raw_text, re.DOTALL)
-        if json_pattern:
-            quiz_part = json_pattern.group(1)
-            notes_part = raw_text[:json_pattern.start()]
+        # Fallback: look for variations of QUIZ_DELIMITER with whitespace
+        delim_match = re.search(r"={3,}\s*QUIZ_JSON\s*={3,}", raw_text, re.IGNORECASE)
+        if delim_match:
+            notes_part = raw_text[:delim_match.start()]
+            quiz_part = raw_text[delim_match.end():]
+        else:
+            # Fallback: look for JSON array containing "question"
+            json_pattern = re.search(r"(\[\s*\{\s*\"question\".*\}\s*\])", raw_text, re.DOTALL)
+            if json_pattern:
+                quiz_part = json_pattern.group(1)
+                notes_part = raw_text[:json_pattern.start()]
 
-    # Parse top-level "## Heading" blocks in order
+    # Parse top-level "## Heading" (and "# Heading") blocks in order
     sections = {}
-    heading_pattern = re.compile(r"^##\s+([^#\n\r]+)$", re.MULTILINE)
+    heading_pattern = re.compile(r"^#{1,3}\s+([^#\n\r]+)$", re.MULTILINE)
     matches = list(heading_pattern.finditer(notes_part))
 
     if matches:
         for i, match in enumerate(matches):
             heading = match.group(1).strip()
+            heading = re.sub(r"^\*\*|\*\*$", "", heading).strip()
             start = match.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(notes_part)
             content = notes_part[start:end].strip()
@@ -159,10 +168,14 @@ def parse_notes_response(raw_text: str) -> dict:
 
     # Extract JSON array substring if needed
     array_match = re.search(r"(\[\s*\{.*\}\s*\])", quiz_text, re.DOTALL)
+    if not array_match and raw_text:
+        array_match = re.search(r"(\[\s*\{\s*\"question\".*\}\s*\])", raw_text, re.DOTALL)
+
     if array_match:
         quiz_json_str = array_match.group(1)
+        cleaned_json = re.sub(r",\s*([\]}])", r"\1", quiz_json_str)
         try:
-            parsed = json.loads(quiz_json_str)
+            parsed = json.loads(cleaned_json)
             if isinstance(parsed, list):
                 for item in parsed:
                     if isinstance(item, dict) and "question" in item and "answer" in item:
@@ -172,7 +185,18 @@ def parse_notes_response(raw_text: str) -> dict:
                             "explanation": str(item.get("explanation", "")).strip(),
                         })
         except Exception:
-            quiz = []
+            try:
+                parsed = json.loads(quiz_json_str)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict) and "question" in item and "answer" in item:
+                            quiz.append({
+                                "question": str(item.get("question", "")).strip(),
+                                "answer": str(item.get("answer", "")).strip(),
+                                "explanation": str(item.get("explanation", "")).strip(),
+                            })
+            except Exception:
+                quiz = []
 
     return {"sections": sections, "quiz": quiz, "raw": raw_text}
 
@@ -181,7 +205,7 @@ def generate_revision_notes(
     api_key: str,
     extracted_text: str,
     subject: str,
-    model_name: str = "gemini-3.6-flash",
+    model_name: str = "gemini-3.5-flash-lite",
     depth: str = "Comprehensive",
     status_callback=None,
 ) -> dict:
@@ -211,7 +235,7 @@ def generate_revision_notes(
                 if status_callback and idx > 0 and attempt == 0:
                     status_callback(f"🔄 High traffic detected on primary model. Switching to backup: {target_model}...")
 
-                token_cap = 5200 if depth == "Exhaustive" else 2800
+                token_cap = 8192
                 response = client.models.generate_content(
                     model=target_model,
                     contents=prompt,
@@ -227,7 +251,22 @@ def generate_revision_notes(
                         "content was flagged by safety filters. Try a different PDF."
                     )
 
-                return parse_notes_response(response.text)
+                # Check for truncation or incomplete generation
+                cand = response.candidates[0] if getattr(response, "candidates", None) else None
+                finish_reason = getattr(cand, "finish_reason", None)
+                is_max_tokens = False
+                if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
+                    is_max_tokens = True
+
+                parsed = parse_notes_response(response.text)
+                is_incomplete = (len(parsed.get("quiz", [])) == 0 and len(parsed.get("sections", {})) <= 1)
+
+                if is_max_tokens or is_incomplete:
+                    raise GeminiAPIError(
+                        f"Incomplete generation from {target_model} (finish_reason: {finish_reason}, sections: {len(parsed.get('sections', {}))}, quiz: {len(parsed.get('quiz', []))})."
+                    )
+
+                return parsed
 
             except Exception as e:
                 last_error = e
@@ -238,15 +277,16 @@ def generate_revision_notes(
                     or "high demand" in err_str
                     or "429" in err_str
                     or "resource_exhausted" in err_str
+                    or "quota" in err_str
                 )
                 if is_transient and attempt == 0:
                     time.sleep(1.5)
                     continue
-                # If model is deprecated or still 503, break out of attempt loop to try next fallback model
+                # If model is deprecated, truncated, or still 503/429, break out of attempt loop to try next fallback model
                 break
 
     raise GeminiAPIError(
-        f"All candidate Gemini models are currently experiencing temporary high demand (503). "
+        f"All candidate Gemini models are currently experiencing temporary high demand or quota limits. "
         f"Spikes usually subside in a few seconds. Details: {last_error}"
     )
 
@@ -256,7 +296,7 @@ def ask_gemini_question(
     api_key: str,
     context_text: str,
     question: str,
-    model_name: str = "gemini-3.6-flash",
+    model_name: str = "gemini-3.5-flash-lite",
 ) -> str:
     """
     Allows a student to ask any follow-up question or clarification about their uploaded notes.

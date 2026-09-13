@@ -76,3 +76,24 @@ def test_section_and_subject_icons():
     assert "Step-by-Step Mechanisms, Algorithms & Workflows" in SECTION_ICONS
     assert "Operating Systems" in SUBJECT_ICONS
     assert "Discrete Mathematics" in SUBJECT_ICONS
+
+
+def test_extract_flashcards_from_numbered_and_inline_bold():
+    """Verifies that numbered lists and inline bold definitions are captured as flashcards."""
+    result = {
+        "sections": {
+            "Step-by-Step Mechanisms, Algorithms & Workflows": (
+                "1. **Arrival Time**: When process enters ready queue.\n"
+                "2. **Burst Time**: CPU execution duration.\n"
+                "In addition, **Turnaround Time**: Total elapsed time from submission to completion.\n"
+            )
+        },
+        "quiz": []
+    }
+    cards = extract_flashcards_from_result(result)
+    assert len(cards) == 3
+    terms = [c["term"] for c in cards]
+    assert "Arrival Time" in terms
+    assert "Burst Time" in terms
+    assert "Turnaround Time" in terms
+

@@ -182,3 +182,39 @@ def test_ask_gemini_question_success(mock_client_cls):
         question="What is a process?",
     )
     assert "process" in answer.lower()
+
+
+@patch("utils.gemini_client.genai.Client")
+def test_generate_revision_notes_incomplete_fallback_cascade(mock_client_cls, mock_gemini_raw_response):
+    """Verifies that when a candidate output is truncated (0 quiz, 1 section), fallback model is invoked."""
+    mock_instance = MagicMock()
+    mock_truncated = MagicMock()
+    mock_truncated.text = "Incomplete notes without headings or quiz delimiter"
+    mock_truncated.candidates = [MagicMock(finish_reason="FinishReason.MAX_TOKENS")]
+
+    mock_success = MagicMock()
+    mock_success.text = mock_gemini_raw_response
+    mock_success.candidates = [MagicMock(finish_reason="FinishReason.STOP")]
+
+    call_count = [0]
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return mock_truncated
+        return mock_success
+
+    mock_instance.models.generate_content.side_effect = side_effect
+    mock_client_cls.return_value = mock_instance
+
+    status_messages = []
+    result = generate_revision_notes(
+        api_key="test_api_key",
+        extracted_text="Operating systems lecture text",
+        subject="Operating Systems",
+        status_callback=lambda msg: status_messages.append(msg),
+    )
+
+    assert "sections" in result
+    assert len(result["quiz"]) == 3
+    assert len(status_messages) > 0
+
