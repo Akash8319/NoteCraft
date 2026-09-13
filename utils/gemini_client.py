@@ -5,6 +5,7 @@ Keeps prompt construction and API error handling isolated from the UI layer.
 
 import json
 import re
+import time
 
 from google import genai
 from google.genai import types
@@ -13,6 +14,14 @@ from google.genai import types
 class GeminiAPIError(Exception):
     """Raised when the Gemini API call fails or returns an unusable response."""
     pass
+
+
+FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+]
 
 
 SUBJECT_HINTS = {
@@ -173,9 +182,11 @@ def generate_revision_notes(
     subject: str,
     model_name: str = "gemini-3.6-flash",
     depth: str = "Comprehensive",
+    status_callback=None,
 ) -> dict:
     """
     Calls the Gemini API to generate structured revision notes with deep, comprehensive coverage.
+    Includes multi-model fallback cascading and retry logic to gracefully bypass 503 UNAVAILABLE spikes.
     """
     if not api_key:
         raise GeminiAPIError(
@@ -186,31 +197,56 @@ def generate_revision_notes(
     if not extracted_text or not extracted_text.strip():
         raise GeminiAPIError("There is no extracted text to send to the AI.")
 
-    try:
-        client = genai.Client(api_key=api_key)
-        prompt = build_prompt(extracted_text, subject, depth=depth)
+    prompt = build_prompt(extracted_text, subject, depth=depth)
+    client = genai.Client(api_key=api_key)
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=8192,
-            ),
-        )
+    # Ordered list of models to try if the primary encounters 503 high-demand or rate limits
+    models_to_try = [model_name] + [m for m in FALLBACK_MODELS if m != model_name]
+    last_error = None
 
-        if not response or not getattr(response, "text", None):
-            raise GeminiAPIError(
-                "Gemini returned an empty response. This can happen if the "
-                "content was flagged by safety filters. Try a different PDF."
-            )
+    for idx, target_model in enumerate(models_to_try):
+        for attempt in range(2):
+            try:
+                if status_callback and idx > 0 and attempt == 0:
+                    status_callback(f"🔄 High traffic detected on primary model. Switching to backup: {target_model}...")
 
-        return parse_notes_response(response.text)
+                response = client.models.generate_content(
+                    model=target_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=8192,
+                    ),
+                )
 
-    except GeminiAPIError:
-        raise
-    except Exception as e:
-        raise GeminiAPIError(f"Gemini API call failed: {e}")
+                if not response or not getattr(response, "text", None):
+                    raise GeminiAPIError(
+                        "Gemini returned an empty response. This can happen if the "
+                        "content was flagged by safety filters. Try a different PDF."
+                    )
+
+                return parse_notes_response(response.text)
+
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                is_transient = (
+                    "503" in err_str
+                    or "unavailable" in err_str
+                    or "high demand" in err_str
+                    or "429" in err_str
+                    or "resource_exhausted" in err_str
+                )
+                if is_transient and attempt == 0:
+                    time.sleep(1.5)
+                    continue
+                # If model is deprecated or still 503, break out of attempt loop to try next fallback model
+                break
+
+    raise GeminiAPIError(
+        f"All candidate Gemini models are currently experiencing temporary high demand (503). "
+        f"Spikes usually subside in a few seconds. Details: {last_error}"
+    )
 
 
 
@@ -222,6 +258,7 @@ def ask_gemini_question(
 ) -> str:
     """
     Allows a student to ask any follow-up question or clarification about their uploaded notes.
+    Includes automated fallback across models if high demand (503) occurs.
     """
     if not api_key:
         raise GeminiAPIError("No Gemini API key found.")
@@ -242,19 +279,25 @@ Provide a clear, engaging, and accurate answer based primarily on the reference 
 Use clean markdown formatting, bold keywords, and bullet points where helpful.
 If the reference material does not contain the answer, clarify that and provide the standard academic explanation.
 """
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=1200,
-            ),
-        )
-        if not response or not getattr(response, "text", None):
-            raise GeminiAPIError("No response received from NoteCraft AI.")
-        return response.text.strip()
-    except Exception as e:
-        raise GeminiAPIError(f"NoteCraft AI Tutor query failed: {e}")
+    models_to_try = [model_name] + [m for m in FALLBACK_MODELS if m != model_name]
+    last_error = None
+    client = genai.Client(api_key=api_key)
+
+    for target_model in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=target_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=1200,
+                ),
+            )
+            if response and getattr(response, "text", None):
+                return response.text.strip()
+        except Exception as e:
+            last_error = e
+            continue
+
+    raise GeminiAPIError(f"NoteCraft AI Tutor query failed: {last_error}")
 

@@ -88,7 +88,7 @@ flowchart TD
 ## 🛠️ Technology Stack
 
 - **Core Framework**: Python 3.10+
-- **LLM & Reasoning Engine**: Google Gemini API (`gemini-3.6-flash` via `google-genai` SDK v1.2.0)
+- **LLM & Reasoning Engine**: Google Gemini API (`gemini-3.6-flash` with automatic resilience fallback cascade to `gemini-3.7-flash`, `gemini-flash-latest`, and `gemini-3.5-flash` via `google-genai` SDK v1.2.0)
 - **PDF Extraction Engine**: PyMuPDF (`fitz` v1.26+)
 - **Interactive UI / Dashboard**: Streamlit 1.40+ (Custom Cyber-Academic Design System)
 - **Audio & Accessibility**: Browser Web Speech API (`window.speechSynthesis`)

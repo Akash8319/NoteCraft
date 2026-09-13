@@ -1395,6 +1395,7 @@ if generate_clicked:
                             extracted_text=extraction.text,
                             subject=subject,
                             depth="Exhaustive" if "Exhaustive" in depth_choice else "High-Yield",
+                            status_callback=lambda msg: status.write(msg),
                         )
                         status.update(label="✨ NoteCraft study materials generated successfully!", state="complete", expanded=False)
 
@@ -1433,6 +1434,8 @@ if generate_clicked:
                         status.update(label="Generation failed", state="error")
                         st.toast("Gemini API error occurred.", icon="⚠️")
                         st.error(f"{e}")
+                        if "503" in str(e) or "unavailable" in str(e).lower() or "high demand" in str(e).lower():
+                            st.info("💡 **Traffic Spike Notice:** Google's Gemini servers are experiencing temporary high demand spikes. NoteCraft has automatic fallback protection. Please wait 5 seconds and click **Craft Revision Workspace** again.")
 
 
 # --------------------------------------------------------------------------
